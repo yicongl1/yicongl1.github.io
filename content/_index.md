@@ -1,6 +1,12 @@
 +++
 archetype = "home"
-title = ""
+title = "主页"
 +++
 
-This is a new home page.
+简单介绍一下自己吧。
+
+我叫李毅聪，2002年生。
+
+现在在法国学习城市工程(Génie Urbain)
+
+做个人网站真的会开心的忘记时间

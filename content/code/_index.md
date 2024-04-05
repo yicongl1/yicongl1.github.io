@@ -1,7 +1,7 @@
 +++
 archetype = "chapter"
-title = "文学创作"
+title = "编程心得"
 weight = 1
 +++
 
-我的写作记录
+我的代码人生
