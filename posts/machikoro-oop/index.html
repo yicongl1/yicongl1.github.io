@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+  <head>
+    <title>用 C&#43;&#43; 给桌游建模：MachiKoro 的卡牌体系与多态结算</title>
+    <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="X-UA-Compatible" content="ie=edge" />
+
+
+
+
+<link rel="canonical" href="https://yicongl1.github.io/posts/machikoro-oop/" />
+
+
+<link rel="stylesheet" href="/application.86e1af23775e182e9eccd3c6074b5a11e0f7cb21a735840a46b8048c42f0d9a6.css" integrity="sha256-huGvI3deGC6ezNPGB0taEeD3yyGnNYQKRrgEjELw2aY=" />
+
+
+
+
+
+<link rel="stylesheet" href="/css/site.css?v=a894fd53b24d758a84e9780111ecb4d1" />
+
+
+
+<script>
+  (function () {
+    document.addEventListener("click", function (event) {
+      var link = event.target.closest ? event.target.closest("a.languages-item") : null;
+      if (!link) return;
+      var href = link.getAttribute("href") || "";
+      var choice = href.indexOf("/fr") === 0 ? "fr" : (href.indexOf("/en") === 0 ? "en" : "zh");
+      try { localStorage.setItem("lang-choice", choice); } catch (e) {}
+    });
+  })();
+</script>
+
+
+
+
+  
+
+  
+  
+  
+  
+    
+    
+    
+  
+
+  <link rel="icon" type="image/svg&#43;xml" href="/images/site/favicon.svg" />
+
+
+
+
+
+
+
+
+
+<meta property="og:title" content="用 C&#43;&#43; 给桌游建模：MachiKoro 的卡牌体系与多态结算" />
+<meta property="og:type" content="website" />
+<meta property="og:description" content="城市工程 × 信息工程 | 可达性研究 · 城市数据分析 · GIS" />
+    <meta property="og:image" content="https://yicongl1.github.io/images/author/avatar.png">
+  <meta property="og:url" content="https://yicongl1.github.io/posts/machikoro-oop/">
+
+	<meta name="twitter:card" content="summary">
+	<meta name="twitter:title" content="用 C&#43;&#43; 给桌游建模：MachiKoro 的卡牌体系与多态结算">
+	<meta name="twitter:description" content="项目代码：https://github.com/yicongl1/Machikoro
+MachiKoro（街角小吃店）是个很适合练面向对象的题目：规则不算复杂，但卡牌类型多、触发时机分散，而且每一种卡的效果都不一样。用 if/else 硬写当然能跑，但很快就会变成一坨难以维护的分支。
+这篇记录我们怎么把规则拆成对象，以及事后回看时觉得哪里还能更好。
+规则先拆成&#34;谁在什么时候做什么&#34; 一个回合可以简化成：
+掷骰 → 收入结算（红 → 蓝/绿 → 紫）→ 建造 1 张建筑 红卡：其他玩家付钱给卡主（咖啡馆、家庭餐厅） 蓝卡：所有拥有该卡的玩家收钱（麦田、牧场、森林、矿场、苹果园） 绿卡：当前玩家收钱，部分卡按图标数量加倍（面包店、奶酪工厂等） 紫卡：当前玩家对其他人收钱或交换（体育场、电视台、商业中心） 黄卡：四座地标，改变规则本身（火车站、商业中心、游乐园、广播塔） 结算顺序不是随便定的：红卡要在蓝卡之前，因为红卡会先把钱从别人手里拿走；紫卡放在最后，因为它可能改变手牌或金币。规则里的顺序就是代码里的调用顺序。
+一个基类，五种颜色 所有卡共有的东西放进 Card：名字、价格、收益、点数区间、图标、颜色。
+class Card { public: virtual ~Card() = default; virtual void action(Bank *p1, Bank *p2, Card *c1, Card *c2, int val) = 0; void set_card(string name, int cost, int value, int low_roll, int high_roll, Icon icon, Color color); int get_value(); int get_cost(); Color get_color(); Icon get_icon(); int get_low_roll(); int get_high_roll(); // ... private: int low_roll = 0; int high_roll = 0; int cost = 0; int value = 0; Color color = Color::blue; Icon icon = Icon::none; string name; }; action() 是纯虚函数，五种子类各自实现。新增一张卡，只需要写一个构造函数和（必要时）一个 action()，主流程不用动。">
+
+    
+<meta name="description" content="用 C&#43;&#43; 给桌游建模：MachiKoro 的卡牌体系与多态结算" />
+
+
+    
+
+    
+
+
+
+
+
+    <script integrity="sha256-6N/HdTRW44DtfcdqA1u42Z4XgmL1dEmNmLPaA2sgp1o=">
+     let theme = localStorage.getItem('theme-scheme') || localStorage.getItem('darkmode:color-scheme') || 'light'
+if (theme === 'system') {
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    theme = 'dark'
+  } else {
+    theme = 'light'
+  }
+}
+document.documentElement.setAttribute('data-theme', theme)
+
+    </script>
+    
+  </head>
+
+  <body class="type-posts kind-page" data-bs-spy="scroll" data-bs-target="#TableOfContents" data-bs-offset="80">
+    <div class="container-fluid bg-secondary wrapper">
+      
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+  
+
+
+
+
+
+  
+  
+  
+
+
+
+  
+  
+  
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+  
+
+
+
+
+  
+
+
+<nav class="navbar navbar-expand-xl top-navbar shadow " id="top-navbar">
+  <div class="container">
+    
+    <button class="navbar-toggler navbar-light" id="sidebar-toggler" type="button">
+      <i data-feather="sidebar"></i>
+    </button>
+    
+    <a class="navbar-brand" href="/">
+      
+        <img src="/images/site/logo-main.svg" id="logo" alt="Logo">
+      李毅聪 · Yicong Li</a>
+    <button
+      class="navbar-toggler navbar-light"
+      id="navbar-toggler"
+      type="button"
+      data-bs-toggle="collapse"
+      data-bs-target="#top-nav-items"
+      aria-label="menu"
+    >
+      <i data-feather="menu"></i>
+    </button>
+
+    <div class="collapse navbar-collapse dynamic-navbar" id="top-nav-items">
+      <ul class="nav navbar-nav ms-auto">
+        <li class="nav-item">
+          <a class="nav-link" href="/#home">主页</a>
+        </li>
+        
+          
+          
+            
+              
+              
+                <li class="nav-item">
+                  <a class="nav-link" href="/#about">关于我</a>
+                </li>
+              
+            
+            
+              
+              
+                <li class="nav-item">
+                  <a class="nav-link" href="/#research">研究兴趣</a>
+                </li>
+              
+            
+            
+              
+              
+                <li class="nav-item">
+                  <a class="nav-link" href="/#skills">技能</a>
+                </li>
+              
+            
+            
+              
+              
+                <li class="nav-item">
+                  <a class="nav-link" href="/#experiences">经历</a>
+                </li>
+              
+            
+            
+              
+              
+                <li class="nav-item">
+                  <a class="nav-link" href="/#education">教育背景</a>
+                </li>
+              
+            
+            
+              
+              
+                <li class="nav-item">
+                  <a class="nav-link" href="/#projects">项目经历</a>
+                </li>
+              
+            
+            
+              
+              
+                <li class="nav-item">
+                  <a class="nav-link" href="/#competitions">竞赛</a>
+                </li>
+              
+            
+            
+            
+              
+              
+                <li class="nav-item">
+                  <a class="nav-link" href="/#connect">链接</a>
+                </li>
+              
+            
+            
+            
+          
+        
+        
+          <div id="top-navbar-divider"></div>
+        
+        
+        
+        
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="navbarMore" role="button" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">更多</a>
+          <div class="dropdown-menu" aria-labelledby="navbarMore">
+            
+              
+                <a class="dropdown-item" href="/undergraduate/">学业档案</a>
+              
+            
+              
+                <a class="dropdown-item" href="/posts/">博文</a>
+              
+            
+              
+                <a class="dropdown-item" href="/downloads/">下载</a>
+              
+            
+              
+                <a class="dropdown-item" href="/projects/">全部项目</a>
+              
+            
+          </div>
+        </li>
+        
+        
+        
+          
+
+
+
+  
+  
+
+
+<li class="nav-item dropdown">
+<a class="nav-link dropdown-toggle"  href="#" id="themeSelector" role="button"
+  data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+  <img id="navbar-theme-icon-svg" class="theme-icon" src="/icons/moon-svgrepo-com.svg" width=20 alt="Dark Theme">
+</a>
+<div id="themeMenu" class="dropdown-menu dropdown-menu-icons-only" aria-labelledby="themeSelector">
+  
+  <a class="dropdown-item nav-link" href="#" data-scheme="light">
+    <img class="theme-icon" src="/icons/sun-svgrepo-com.svg" width=20 alt="Light Theme">
+  </a>
+  
+  
+  <a class="dropdown-item nav-link" href="#" data-scheme="dark">
+    <img class="theme-icon" src="/icons/moon-svgrepo-com.svg" width=20 alt="Dark Theme">
+  </a>
+  
+  
+  <a class="dropdown-item nav-link" href="#" data-scheme="system">
+    <img class="theme-icon" src="/icons/computer-svgrepo-com.svg" width=20 alt="System Theme">
+  </a>
+  
+</div>
+</li>
+
+        
+      </ul>
+    </div>
+  </div>
+  
+  
+    <img src="/images/site/logo-main.svg" class="d-none" id="main-logo" alt="Logo">
+  
+  
+    <img src="/images/site/logo-inverted.svg" class="d-none" id="inverted-logo" alt="Logo">
+  
+  
+</nav>
+
+
+
+      
+      
+<section class="sidebar-section" id="sidebar-section">
+  <div class="sidebar-holder">
+    <div class="sidebar" id="sidebar">
+      <form class="mx-auto" method="get" action="/search">
+        <input type="text" name="keyword" value="" placeholder="搜索" data-search="" id="search-box" />
+      </form>
+      <div class="sidebar-tree">
+        <ul class="tree" id="tree">
+          
+          
+          <li id="list-heading"><a href="/posts/" data-filter="all">博文</a></li>
+          <div class="subtree">
+            
+
+          </div>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+      
+      
+
+<section class="content-section" id="content-section">
+  <div class="content">
+    <div class="container p-0 read-area no-hero">
+      
+      
+
+
+      
+      <div class="page-content">
+        
+        
+        
+        <div class="author-profile ms-auto align-self-lg-center">
+          <img class="rounded-circle" src='/images/author/avatar_hu_c3ce56cd7b0e8607.png' alt="Author Image">
+          <h5 class="author-name">李毅聪 · Yicong Li</h5>
+          <p class="text-muted">
+            Friday, November 6, 2026
+             | 
+            3分钟</p>
+        </div>
+        
+
+        <div class="title">
+          <h1>用 C&#43;&#43; 给桌游建模：MachiKoro 的卡牌体系与多态结算</h1>
+        </div>
+
+        
+
+        
+        <div class="tags">
+  <ul style="padding-left: 0;">
+    
+  </ul>
+</div>
+
+        
+        <div class="post-content" id="post-content">
+          <p>项目代码：<a href="https://github.com/yicongl1/Machikoro" target="_blank" rel="noopener">https://github.com/yicongl1/Machikoro</a></p>
+<p>MachiKoro（街角小吃店）是个很适合练面向对象的题目：规则不算复杂，但卡牌类型多、触发时机分散，而且每一种卡的效果都不一样。用 <code>if/else</code> 硬写当然能跑，但很快就会变成一坨难以维护的分支。</p>
+<p>这篇记录我们怎么把规则拆成对象，以及事后回看时觉得哪里还能更好。</p>
+<h2 id="规则先拆成谁在什么时候做什么">规则先拆成&quot;谁在什么时候做什么&quot;</h2>
+<p>一个回合可以简化成：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-text" data-lang="text"><span style="display:flex;"><span>掷骰 → 收入结算（红 → 蓝/绿 → 紫）→ 建造 1 张建筑
+</span></span></code></pre></div><ul>
+<li><strong>红卡</strong>：其他玩家付钱给卡主（咖啡馆、家庭餐厅）</li>
+<li><strong>蓝卡</strong>：所有拥有该卡的玩家收钱（麦田、牧场、森林、矿场、苹果园）</li>
+<li><strong>绿卡</strong>：当前玩家收钱，部分卡按图标数量加倍（面包店、奶酪工厂等）</li>
+<li><strong>紫卡</strong>：当前玩家对其他人收钱或交换（体育场、电视台、商业中心）</li>
+<li><strong>黄卡</strong>：四座地标，改变规则本身（火车站、商业中心、游乐园、广播塔）</li>
+</ul>
+<p>结算顺序不是随便定的：红卡要在蓝卡之前，因为红卡会先把钱从别人手里拿走；紫卡放在最后，因为它可能改变手牌或金币。<strong>规则里的顺序就是代码里的调用顺序</strong>。</p>
+<h2 id="一个基类五种颜色">一个基类，五种颜色</h2>
+<p>所有卡共有的东西放进 <code>Card</code>：名字、价格、收益、点数区间、图标、颜色。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">class</span> <span style="color:#a6e22e">Card</span> {
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">public</span><span style="color:#f92672">:</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">virtual</span> <span style="color:#f92672">~</span>Card() <span style="color:#f92672">=</span> <span style="color:#66d9ef">default</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">virtual</span> <span style="color:#66d9ef">void</span> <span style="color:#a6e22e">action</span>(Bank <span style="color:#f92672">*</span>p1, Bank <span style="color:#f92672">*</span>p2, Card <span style="color:#f92672">*</span>c1, Card <span style="color:#f92672">*</span>c2, <span style="color:#66d9ef">int</span> val) <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">void</span> <span style="color:#a6e22e">set_card</span>(string name, <span style="color:#66d9ef">int</span> cost, <span style="color:#66d9ef">int</span> value,
+</span></span><span style="display:flex;"><span>                  <span style="color:#66d9ef">int</span> low_roll, <span style="color:#66d9ef">int</span> high_roll, Icon icon, Color color);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> <span style="color:#a6e22e">get_value</span>();
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> <span style="color:#a6e22e">get_cost</span>();
+</span></span><span style="display:flex;"><span>    Color <span style="color:#a6e22e">get_color</span>();
+</span></span><span style="display:flex;"><span>    Icon <span style="color:#a6e22e">get_icon</span>();
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> <span style="color:#a6e22e">get_low_roll</span>();
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> <span style="color:#a6e22e">get_high_roll</span>();
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#66d9ef">private</span><span style="color:#f92672">:</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> low_roll <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> high_roll <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> cost <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> value <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    Color color <span style="color:#f92672">=</span> Color<span style="color:#f92672">::</span>blue;
+</span></span><span style="display:flex;"><span>    Icon icon <span style="color:#f92672">=</span> Icon<span style="color:#f92672">::</span>none;
+</span></span><span style="display:flex;"><span>    string name;
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></div><p><code>action()</code> 是纯虚函数，五种子类各自实现。新增一张卡，只需要写一个构造函数和（必要时）一个 <code>action()</code>，主流程不用动。</p>
+<h3 id="蓝卡最简单的多态">蓝卡：最简单的多态</h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">void</span> BlueCard<span style="color:#f92672">::</span>action(Bank <span style="color:#f92672">*</span>p1, Bank <span style="color:#f92672">*</span>p2, Card <span style="color:#f92672">*</span>c1, Card <span style="color:#f92672">*</span>c2, <span style="color:#66d9ef">int</span> val) {
+</span></span><span style="display:flex;"><span>    p1<span style="color:#f92672">-&gt;</span>deposit(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>get_value());
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>蓝卡只关心&quot;谁收钱&quot;，<code>p2</code>、<code>c1</code>、<code>c2</code>、<code>val</code> 都用不上。</p>
+<h3 id="绿卡倍率与地标加成">绿卡：倍率与地标加成</h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">void</span> GreenCard<span style="color:#f92672">::</span>action(Bank <span style="color:#f92672">*</span>p1, Bank <span style="color:#f92672">*</span>p2, Card <span style="color:#f92672">*</span>c1, Card <span style="color:#f92672">*</span>c2, <span style="color:#66d9ef">int</span> val) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> bonus <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (c1 <span style="color:#f92672">!=</span> NULL) bonus <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span>;   <span style="color:#75715e">// 拥有 Shopping Mall
+</span></span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>multiplier <span style="color:#f92672">==</span> Icon<span style="color:#f92672">::</span>none) {
+</span></span><span style="display:flex;"><span>        p1<span style="color:#f92672">-&gt;</span>deposit(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>get_value() <span style="color:#f92672">+</span> bonus);
+</span></span><span style="display:flex;"><span>    } <span style="color:#66d9ef">else</span> {
+</span></span><span style="display:flex;"><span>        p1<span style="color:#f92672">-&gt;</span>deposit(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>get_value() <span style="color:#f92672">*</span> val <span style="color:#f92672">+</span> bonus);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p><code>val</code> 不是骰子点数，而是&quot;场上该图标出现的数量&quot;。奶酪工厂按牛的数量算钱，家具工厂按齿轮，果蔬市场按谷物。这个数量由 <code>Game</code> 在结算前数好传进来，卡牌本身不遍历全场。</p>
+<h3 id="红卡从别人口袋里拿钱">红卡：从别人口袋里拿钱</h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">void</span> RedCard<span style="color:#f92672">::</span>action(Bank <span style="color:#f92672">*</span>p1, Bank <span style="color:#f92672">*</span>p2, Card <span style="color:#f92672">*</span>c1, Card <span style="color:#f92672">*</span>c2, <span style="color:#66d9ef">int</span> val) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> bonus <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (c1 <span style="color:#f92672">!=</span> NULL) bonus <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span>;
+</span></span><span style="display:flex;"><span>    p1<span style="color:#f92672">-&gt;</span>deposit(p2<span style="color:#f92672">-&gt;</span>withdraw(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>get_value() <span style="color:#f92672">+</span> bonus));
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p><code>p1</code> 是卡主，<code>p2</code> 是当前掷骰的玩家。<code>Bank::withdraw()</code> 在余额不足时返回实际扣除的数量，不会让金币凭空消失：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">int</span> Bank<span style="color:#f92672">::</span>withdraw(<span style="color:#66d9ef">int</span> val) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (val <span style="color:#f92672">&lt;=</span> <span style="color:#ae81ff">0</span>) <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (val <span style="color:#f92672">&gt;</span> <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>coins) {
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">int</span> temp <span style="color:#f92672">=</span> <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>coins;
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>coins <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">return</span> temp;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>coins <span style="color:#f92672">-=</span> val;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">return</span> val;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h3 id="紫卡规则复杂到要交给-game">紫卡：规则复杂到要交给 Game</h3>
+<p>体育场和电视台可以复用&quot;从别人扣钱&quot;的逻辑，但商业中心需要玩家选择交换对象和卡牌，卡牌自己没法弹交互。所以 <code>BusinessCenter::action()</code> 是空的，由 <code>Game::business_center_effect()</code> 接管：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">void</span> Game<span style="color:#f92672">::</span>purple_card_check() {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>dice <span style="color:#f92672">==</span> <span style="color:#ae81ff">6</span>) {
+</span></span><span style="display:flex;"><span>        player<span style="color:#f92672">*</span> p <span style="color:#f92672">=</span> <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>players[<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>turn];
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">for</span> (Card<span style="color:#f92672">*</span> card : p<span style="color:#f92672">-&gt;</span>purple_cards) {
+</span></span><span style="display:flex;"><span>            <span style="color:#66d9ef">if</span> (Stadium<span style="color:#f92672">*</span> stadium <span style="color:#f92672">=</span> <span style="color:#66d9ef">dynamic_cast</span><span style="color:#f92672">&lt;</span>Stadium<span style="color:#f92672">*&gt;</span>(card)) {
+</span></span><span style="display:flex;"><span>                <span style="color:#75715e">// 向除自己以外的每个玩家收钱
+</span></span></span><span style="display:flex;"><span>            } <span style="color:#66d9ef">else</span> <span style="color:#a6e22e">if</span> (TVStation<span style="color:#f92672">*</span> tv <span style="color:#f92672">=</span> <span style="color:#66d9ef">dynamic_cast</span><span style="color:#f92672">&lt;</span>TVStation<span style="color:#f92672">*&gt;</span>(card)) {
+</span></span><span style="display:flex;"><span>                <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>tv_station_effect(tv);
+</span></span><span style="display:flex;"><span>            } <span style="color:#66d9ef">else</span> <span style="color:#a6e22e">if</span> (BusinessCenter<span style="color:#f92672">*</span> bc <span style="color:#f92672">=</span> <span style="color:#66d9ef">dynamic_cast</span><span style="color:#f92672">&lt;</span>BusinessCenter<span style="color:#f92672">*&gt;</span>(card)) {
+</span></span><span style="display:flex;"><span>                <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>business_center_effect(bc);
+</span></span><span style="display:flex;"><span>            }
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>buy_propery();
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这里用 <code>dynamic_cast</code> 而不是比较卡名。早期版本用 <code>get_name() == &quot;Stadium&quot;</code> 判断，名字一改效果就静默失效——<strong>能用类型表达的东西，不要用字符串</strong>。</p>
+<h2 id="结算流水线">结算流水线</h2>
+<p><code>Game::roll_dice()</code> 负责整个回合的前半段：</p>
+<ol>
+<li>发牌、打印市场与当前玩家</li>
+<li>有火车站时选 1 或 2 颗骰子</li>
+<li>掷骰；有广播塔且点数 ≤ 4 时重掷一次</li>
+<li>依次调用 <code>red_card_check()</code> → <code>blue_card_check()</code> → <code>green_card_check()</code> → <code>purple_card_check()</code></li>
+</ol>
+<p>每个 <code>*_check()</code> 只做两件事：判断点数是否落在卡的区间里，命中就调用 <code>action()</code>。卡牌不关心自己是怎么被找到的，<code>Game</code> 也不关心卡牌具体怎么结算。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">for</span> (RedCard<span style="color:#f92672">*</span> card : owner<span style="color:#f92672">-&gt;</span>red_cards) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (dice <span style="color:#f92672">&gt;=</span> card<span style="color:#f92672">-&gt;</span>get_low_roll() <span style="color:#f92672">&amp;&amp;</span> dice <span style="color:#f92672">&lt;=</span> card<span style="color:#f92672">-&gt;</span>get_high_roll()) {
+</span></span><span style="display:flex;"><span>        card<span style="color:#f92672">-&gt;</span>action(owner<span style="color:#f92672">-&gt;</span>bank, current<span style="color:#f92672">-&gt;</span>bank, mall, <span style="color:#66d9ef">nullptr</span>, <span style="color:#ae81ff">0</span>);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h2 id="牌堆单例与玩家">牌堆、单例与玩家</h2>
+<p><code>Deck</code> 的构造函数集中创建所有卡牌，相当于一个简单工厂：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Deck<span style="color:#f92672">::</span>Deck() {
+</span></span><span style="display:flex;"><span>    Card<span style="color:#f92672">*</span> c;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">for</span> (<span style="color:#66d9ef">int</span> i <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; i <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">6</span>; i<span style="color:#f92672">++</span>) { c <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> WheatField();  deck.push_back(c); }
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">for</span> (<span style="color:#66d9ef">int</span> i <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; i <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">6</span>; i<span style="color:#f92672">++</span>) { c <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> Ranch();       deck.push_back(c); }
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">// ... 15 种建筑，按官方数量创建
+</span></span></span><span style="display:flex;"><span>    shuffle();
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p><code>Game</code> 用单例保证全局只有一份游戏状态；<code>player</code> 按颜色维护五个 <code>vector</code>，每种卡只进对应的容器。这样结算时不用遍历&quot;所有卡再判断颜色&quot;，直接遍历对应容器。</p>
+<h2 id="回看action-的参数其实是一个没定义的上下文对象">回看：<code>action()</code> 的参数其实是一个没定义的上下文对象</h2>
+<p><code>action(Bank*, Bank*, Card*, Card*, int)</code> 能跑，但每个参数的含义只存在于注释和记忆里：</p>
+<ul>
+<li><code>p1</code> 收钱，<code>p2</code> 付钱</li>
+<li><code>c1</code> 非空表示购物中心加成</li>
+<li><code>c2</code> 目前没用</li>
+<li><code>val</code> 是图标数量</li>
+</ul>
+<p>这就是典型的&quot;参数太多，其实该建一个结构体&quot;：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">struct</span> <span style="color:#a6e22e">SettlementContext</span> {
+</span></span><span style="display:flex;"><span>    Bank<span style="color:#f92672">*</span> receiver;
+</span></span><span style="display:flex;"><span>    Bank<span style="color:#f92672">*</span> payer;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">bool</span> has_shopping_mall;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">int</span> icon_count;
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></div><p>如果重做，我会把 <code>c2</code> 删掉，把 <code>val</code> 改名成 <code>icon_count</code>，再让 <code>action(const SettlementContext&amp;)</code> 只接收它真正需要的字段。这样读代码的人不需要先读一遍 README。</p>
+<p>另一个可以改的地方是地标的下标：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">enum</span> <span style="color:#a6e22e">YellowSlot</span> {
+</span></span><span style="display:flex;"><span>    TRAIN_STATION <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>,
+</span></span><span style="display:flex;"><span>    SHOPPING_MALL <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span>,
+</span></span><span style="display:flex;"><span>    AMUSEMENT_PARK <span style="color:#f92672">=</span> <span style="color:#ae81ff">2</span>,
+</span></span><span style="display:flex;"><span>    RADIO_TOWER <span style="color:#f92672">=</span> <span style="color:#ae81ff">3</span>
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></div><p>四个地标固定放在 <code>yellow_cards</code> 的四个位置，简单直接，但一旦顺序变化就会全盘出错。更稳的做法是用 <code>map&lt;Landmark, YellowCard*&gt;</code>，或者干脆给每个地标一个独立成员。</p>
+<h2 id="小结">小结</h2>
+<p>这个项目最重要的不是&quot;用了多态&quot;，而是<strong>把规则里的变化点放进了类型系统</strong>：</p>
+<ul>
+<li>卡牌效果 → 虚函数</li>
+<li>卡牌颜色 → 子类 + 独立容器</li>
+<li>结算阶段 → 固定的调用顺序</li>
+<li>地标状态 → <code>active</code> 标志 + 明确的槽位</li>
+</ul>
+<p>规则会变，卡牌会加，但主循环可以保持不变。这是面向对象在这个题目里真正有用的地方。</p>
+
+        </div>
+
+        
+        <div class="row ps-3 pe-3">
+          
+          <div class="col-md-6 share-buttons">
+            
+            <strong>分享:</strong>
+            
+            
+            
+            
+            
+            
+            <a class="btn icon-button bg-linkedin"
+              href="https://www.linkedin.com/shareArticle?url=https%3a%2f%2fyicongl1.github.io%2fposts%2fmachikoro-oop%2f&title=%e7%94%a8%20C%2b%2b%20%e7%bb%99%e6%a1%8c%e6%b8%b8%e5%bb%ba%e6%a8%a1%ef%bc%9aMachiKoro%20%e7%9a%84%e5%8d%a1%e7%89%8c%e4%bd%93%e7%b3%bb%e4%b8%8e%e5%a4%9a%e6%80%81%e7%bb%93%e7%ae%97" target="_blank">
+              <i class="fab fa-linkedin"></i>
+            </a>
+            
+            
+            
+            
+            
+            <a class="btn icon-button" href="mailto:?subject=%e7%94%a8%20C%2b%2b%20%e7%bb%99%e6%a1%8c%e6%b8%b8%e5%bb%ba%e6%a8%a1%ef%bc%9aMachiKoro%20%e7%9a%84%e5%8d%a1%e7%89%8c%e4%bd%93%e7%b3%bb%e4%b8%8e%e5%a4%9a%e6%80%81%e7%bb%93%e7%ae%97&body=https%3a%2f%2fyicongl1.github.io%2fposts%2fmachikoro-oop%2f" target="_blank">
+              <i class="fas fa-envelope-open-text"></i>
+            </a>
+            
+            
+          </div>
+
+          
+          
+        </div>
+
+
+
+        
+        <hr />
+        
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="row next-prev-navigator">
+  
+  
+</div>
+
+        <hr />
+
+        
+        
+
+        
+        
+
+      </div>
+    </div>
+  </div>
+  
+  <a id="scroll-to-top" class="btn" type="button" data-bs-toggle="tooltip" data-bs-placement="left"
+    title="Scroll to top">
+    <i class="fas fa-chevron-circle-up"></i>
+  </a>
+</section>
+
+
+      
+      
+<section class="toc-section" id="toc-section">
+  
+  <div class="toc-holder">
+    <h5 class="text-center ps-3">目录</h5>
+    <hr>
+    <div class="toc">
+      <nav id="TableOfContents">
+  <ul>
+    <li><a href="#规则先拆成谁在什么时候做什么">规则先拆成&quot;谁在什么时候做什么&quot;</a></li>
+    <li><a href="#一个基类五种颜色">一个基类，五种颜色</a>
+      <ul>
+        <li><a href="#蓝卡最简单的多态">蓝卡：最简单的多态</a></li>
+        <li><a href="#绿卡倍率与地标加成">绿卡：倍率与地标加成</a></li>
+        <li><a href="#红卡从别人口袋里拿钱">红卡：从别人口袋里拿钱</a></li>
+        <li><a href="#紫卡规则复杂到要交给-game">紫卡：规则复杂到要交给 Game</a></li>
+      </ul>
+    </li>
+    <li><a href="#结算流水线">结算流水线</a></li>
+    <li><a href="#牌堆单例与玩家">牌堆、单例与玩家</a></li>
+    <li><a href="#回看action-的参数其实是一个没定义的上下文对象">回看：<code>action()</code> 的参数其实是一个没定义的上下文对象</a></li>
+    <li><a href="#小结">小结</a></li>
+  </ul>
+</nav>
+    </div>
+  </div>
+  
+</section>
+
+    </div>
+
+    
+    
+
+
+
+
+
+
+
+
+
+
+<footer id="footer" class="container-fluid text-center align-content-center footer pb-2">
+  <div class="container pt-5">
+    <div class="row text-start">
+      <div class="col-md-4 col-sm-12">
+        <h5>导航</h5>
+        <ul>
+            
+              
+              <li class="nav-item">
+                <a class="smooth-scroll" href="https://yicongl1.github.io/#about">关于我</a>
+              </li>
+            
+            
+              
+              <li class="nav-item">
+                <a class="smooth-scroll" href="https://yicongl1.github.io/#research">研究兴趣</a>
+              </li>
+            
+            
+              
+              <li class="nav-item">
+                <a class="smooth-scroll" href="https://yicongl1.github.io/#skills">技能</a>
+              </li>
+            
+            
+              
+              <li class="nav-item">
+                <a class="smooth-scroll" href="https://yicongl1.github.io/#experiences">经历</a>
+              </li>
+            
+            
+              
+              <li class="nav-item">
+                <a class="smooth-scroll" href="https://yicongl1.github.io/#education">教育背景</a>
+              </li>
+            
+            
+              
+              <li class="nav-item">
+                <a class="smooth-scroll" href="https://yicongl1.github.io/#projects">项目经历</a>
+              </li>
+            
+            
+              
+              <li class="nav-item">
+                <a class="smooth-scroll" href="https://yicongl1.github.io/#competitions">竞赛</a>
+              </li>
+            
+            
+            
+              
+              <li class="nav-item">
+                <a class="smooth-scroll" href="https://yicongl1.github.io/#connect">链接</a>
+              </li>
+            
+            
+            
+          
+            
+              
+                <li class="nav-item">
+                  <a href="/undergraduate/">学业档案</a>
+                </li>
+              
+            
+              
+            
+              
+                <li class="nav-item">
+                  <a href="/downloads/">下载</a>
+                </li>
+              
+            
+              
+            
+          
+        </ul>
+      </div>
+
+      <div class="col-md-4 col-sm-12">
+        <h5>联系方式:</h5>
+        <ul>
+          
+            <li><a href="mailto:li2500@outlook.com"><i class="fas fa-envelope"></i> <span>li2500@outlook.com</span></a></li>
+          
+        </ul>
+      </div>
+
+      <div class="col-md-4 col-sm-12">
+        <h5>此刻的时间</h5>
+        <ul>
+          <li>
+            <i class="fas fa-clock"></i>
+            <span>法国(巴黎)</span>
+            <span id="france-clock" style="font-variant-numeric: tabular-nums; font-weight: 600;">--:--:--</span>
+            <small id="france-date" class="d-block text-muted"></small>
+          </li>
+          <li>
+            <i class="fas fa-clock"></i>
+            <span>中国(上海)</span>
+            <span id="china-clock" style="font-variant-numeric: tabular-nums;">--:--</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <hr />
+  <div class="container">
+    <div class="row text-start">
+      <div class="col-md-4">
+        <a href="https://github.com/hugo-toha/toha" target="_blank" rel="noopener">Toha</a>
+      </div>
+      <div class="col-md-4 text-center">
+        © 2026 李毅聪 Yicong Li
+      </div>
+      <div class="col-md-4 text-end">
+        <a href="/private/" title="私人空间" aria-label="Private space" class="me-2"><i class="fas fa-lock"></i></a>
+        <a href="https://gohugo.io/" target="_blank" rel="noopener">Powered by Hugo</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  function parts(tz) {
+    var p = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+      weekday: "short", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+    }).formatToParts(new Date());
+    var o = {};
+    for (var i = 0; i < p.length; i++) { o[p[i].type] = p[i].value; }
+    return {
+      time: o.hour + ":" + o.minute + ":" + o.second,
+      date: o.year + "年" + o.month + "月" + o.day + "日 " + o.weekday
+    };
+  }
+  function tick() {
+    var fr = parts("Europe/Paris");
+    var cn = parts("Asia/Shanghai");
+    var f = document.getElementById("france-clock");
+    var d = document.getElementById("france-date");
+    var c = document.getElementById("china-clock");
+    if (f) f.textContent = fr.time;
+    if (d) d.textContent = fr.date;
+    if (c) c.textContent = cn.time;
+  }
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
+
+
+
+<script src="/js/code-copy.js" defer></script>
+
+    <script src="/application.ca282a2e5ac80f0c645305a29ada3a158fb0b8ace7d7be3724486aae3baa1aec.js" integrity="sha256-yigqLlrIDwxkUwWimto6FY&#43;wuKzn1743JEhqrjuqGuw=" defer></script>
+
+
+    
+     
+
+    
+    
+
+</body>
+</html>
