@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>GitHub Actions · 李毅聪 · Yicong Li</title><link>https://www.lyc6.com/tags/github-actions/</link><description>李毅聪 · Yicong Li</description><generator>Hugo</generator><language>zh-cn</language><lastBuildDate>Sat, 28 Nov 2026 10:31:23 +0000</lastBuildDate><atom:link href="https://www.lyc6.com/tags/github-actions/rss.xml" rel="self" type="application/rss+xml"/><item><title>把发布交给 GitHub Actions：双仓库、单提交与一次跨平台迁移</title><link>https://www.lyc6.com/posts/github-actions-publish/</link><pubDate>Fri, 27 Nov 2026 01:20:00 +0800</pubDate><guid>https://www.lyc6.com/posts/github-actions-publish/</guid><description>&lt;p&gt;这个站点一直是「本地构建、本地加密、本地强推」：改完内容，跑一个 PowerShell 脚本，等一两分钟构建和加密，再把产物推上去。人必须待在电脑前，而且那台电脑得装好 Hugo、Node、Dart Sass，密码文件也得在。&lt;/p&gt;
+&lt;p&gt;内容越写越多之后，这件事开始碍事——尤其是出门在外、只想改一句话的时候。于是把整条流水线搬到了 GitHub Actions。下面是设计、踩坑和从 Windows runner 换到 Linux 的记录。&lt;/p&gt;
+&lt;h2 id="一约束"&gt;一、约束&lt;/h2&gt;
+&lt;p&gt;站点有两个仓库，职责完全不同：&lt;/p&gt;
+&lt;div class="table-scroll"&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;仓库&lt;/th&gt;
+&lt;th&gt;内容&lt;/th&gt;
+&lt;th&gt;谁能写&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;源码仓库（私有）&lt;/td&gt;
+&lt;td&gt;Markdown、模板、脚本&lt;/td&gt;
+&lt;td&gt;我，手工提交&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;站点仓库（公开）&lt;/td&gt;
+&lt;td&gt;构建产物&lt;/td&gt;
+&lt;td&gt;只由流水线强推&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;/div&gt;
+&lt;p&gt;三条约束决定了方案：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;源码不能进公开仓库&lt;/strong&gt;——非公开内容在建站时就该被排除在外；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;公开仓库只有一个 &lt;code&gt;Site update&lt;/code&gt; 提交&lt;/strong&gt;——如果保留线性历史，diff 会暴露「这次改了哪些文件、新增了哪些页面」；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;非公开页面必须加密后才能上线&lt;/strong&gt;——构建产物里它们仍是明文，加密这一步不能省。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;所以流水线不是「Hugo 构建完推上去」这么简单，而是：构建 → 加密 → 压成一个提交 → 强推。&lt;/p&gt;
+&lt;h2 id="二流水线的形状"&gt;二、流水线的形状&lt;/h2&gt;
+&lt;p&gt;触发条件只有两个：推送到私有仓库的 &lt;code&gt;main&lt;/code&gt;，或者手动点一次 &lt;code&gt;Run workflow&lt;/code&gt;。&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-yaml" data-lang="yaml"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#f92672"&gt;on&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;push&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;branches&lt;/span&gt;: [&lt;span style="color:#ae81ff"&gt;main]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;workflow_dispatch&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#f92672"&gt;jobs&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;publish&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;runs-on&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;ubuntu-latest&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;steps&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;uses&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;actions/checkout@v4&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;with&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;submodules&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;recursive&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;uses&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;peaceiris/actions-hugo@v3&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;with&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;hugo-version&lt;/span&gt;: &lt;span style="color:#e6db74"&gt;&amp;#39;0.169.0&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;extended&lt;/span&gt;: &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# ... Node、Dart Sass、npm ci ...&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;run&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;bash scripts/publish.sh &lt;/span&gt; &lt;span style="color:#75715e"&gt;# 构建 + 加密&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;run&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;./scripts/check-site.ps1 &lt;/span&gt; &lt;span style="color:#75715e"&gt;# 冒烟检查&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;uses&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;peaceiris/actions-gh-pages@v4&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;with&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;personal_token&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;${{ secrets.PAGES_TOKEN }}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;external_repository&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;yicongl1/yicongl1.github.io&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;publish_branch&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;main&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;publish_dir&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;./public&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;force_orphan&lt;/span&gt;: &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;full_commit_message&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;Site update&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;几处细节值得写下来：&lt;/p&gt;</description></item></channel></rss>

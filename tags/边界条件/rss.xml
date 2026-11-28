@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>边界条件 · 李毅聪 · Yicong Li</title><link>https://www.lyc6.com/tags/%E8%BE%B9%E7%95%8C%E6%9D%A1%E4%BB%B6/</link><description>李毅聪 · Yicong Li</description><generator>Hugo</generator><language>zh-cn</language><lastBuildDate>Sat, 28 Nov 2026 10:31:24 +0000</lastBuildDate><atom:link href="https://www.lyc6.com/tags/%E8%BE%B9%E7%95%8C%E6%9D%A1%E4%BB%B6/rss.xml" rel="self" type="application/rss+xml"/><item><title>桌游程序的边界：MachiKoro 的购买流程、索引与 AI</title><link>https://www.lyc6.com/posts/machikoro-edge-cases/</link><pubDate>Fri, 06 Nov 2026 08:30:00 +0800</pubDate><guid>https://www.lyc6.com/posts/machikoro-edge-cases/</guid><description>&lt;p&gt;项目代码：&lt;a href="https://github.com/yicongl1/Machikoro" target="_blank" rel="noopener"&gt;https://github.com/yicongl1/Machikoro&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;规则写对只是第一步。真正让人崩溃的是边界：买不起怎么办、卡槽编号在购买后变了、AI 选了一个不合法的动作、输入的字符串看起来对但匹配不上。&lt;/p&gt;
+&lt;p&gt;这篇记录 MachiKoro 项目里购买与输入处理的设计，以及修过的几类典型 bug。&lt;/p&gt;
+&lt;h2 id="购买流程返回值到底表示什么"&gt;购买流程：返回值到底表示什么&lt;/h2&gt;
+&lt;p&gt;早期版本的 &lt;code&gt;player_input()&lt;/code&gt; 返回一个 &lt;code&gt;int&lt;/code&gt;，这个 &lt;code&gt;int&lt;/code&gt; 有时候表示“卡槽编号”，有时候表示“剩余金币数”，还可能是 &lt;code&gt;-1&lt;/code&gt; 表示不买。结果就是：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;买地标时把金币数当成下标，越界&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;slot[0]&lt;/code&gt; 永远买不到&lt;/li&gt;
+&lt;li&gt;先扣钱、后校验，买不起也能把金币扣成负数&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;后来把返回值语义固定下来：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-cpp" data-lang="cpp"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;enum&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;PurchaseCode&lt;/span&gt; {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; NO_PURCHASE &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#f92672"&gt;-&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;, &lt;span style="color:#75715e"&gt;// 选择 no，结束购买
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; YELLOW_PURCHASE &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#f92672"&gt;-&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;2&lt;/span&gt; &lt;span style="color:#75715e"&gt;// 已成功购买一张大型建筑
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;};
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;普通建筑返回真实的卡槽下标，两个特殊值负责“不买”和“已买地标”。调用方只需要判断这三种情况，不再猜数字的含义。&lt;/p&gt;
+&lt;p&gt;更好的写法是 &lt;code&gt;enum class&lt;/code&gt; + &lt;code&gt;std::optional&amp;lt;int&amp;gt;&lt;/code&gt;（C++17 起），避免负数和下标混在一起。但在一个 C++14 的控制台作业里，能用枚举把语义写清楚，已经比“魔法数字”好很多。&lt;/p&gt;
+&lt;h2 id="先校验后扣钱"&gt;先校验，后扣钱&lt;/h2&gt;
+&lt;p&gt;购买普通建筑时，所有失败条件都必须在 &lt;code&gt;withdraw()&lt;/code&gt; 之前检查：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-cpp" data-lang="cpp"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;bool&lt;/span&gt; Game&lt;span style="color:#f92672"&gt;::&lt;/span&gt;buy_slot(&lt;span style="color:#66d9ef"&gt;int&lt;/span&gt; index) {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (index &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt; &lt;span style="color:#f92672"&gt;||&lt;/span&gt; index &lt;span style="color:#f92672"&gt;&amp;gt;=&lt;/span&gt; (&lt;span style="color:#66d9ef"&gt;int&lt;/span&gt;)slot.size() &lt;span style="color:#f92672"&gt;||&lt;/span&gt; slot[index].empty())
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; false;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; Card&lt;span style="color:#f92672"&gt;*&lt;/span&gt; card &lt;span style="color:#f92672"&gt;=&lt;/span&gt; slot[index].back();
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;// 紫卡不能重复拥有
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (card&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;get_color() &lt;span style="color:#f92672"&gt;==&lt;/span&gt; Color&lt;span style="color:#f92672"&gt;::&lt;/span&gt;purple) {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; (PurpleCard&lt;span style="color:#f92672"&gt;*&lt;/span&gt; owned : p&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;purple_cards) {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (owned&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;get_name() &lt;span style="color:#f92672"&gt;==&lt;/span&gt; card&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;get_name())
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; false;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; }
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; }
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;// 钱不够
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (p&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;bank&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;get_coins() &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; card&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;get_cost())
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; false;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;// 到这里才真正扣钱
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; p&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;bank&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;withdraw(card&lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt;get_cost());
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;// ...
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;}
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;这是一条很朴素的规则：&lt;strong&gt;任何可能失败的操作，都把失败判断放在状态修改之前&lt;/strong&gt;。一旦顺序反了，后面每一条错误分支都要负责“把钱加回去”，很容易漏。&lt;/p&gt;</description></item></channel></rss>

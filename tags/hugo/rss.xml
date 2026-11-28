@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Hugo · 李毅聪 · Yicong Li</title><link>https://www.lyc6.com/tags/hugo/</link><description>李毅聪 · Yicong Li</description><generator>Hugo</generator><language>zh-cn</language><lastBuildDate>Sat, 28 Nov 2026 10:31:23 +0000</lastBuildDate><atom:link href="https://www.lyc6.com/tags/hugo/rss.xml" rel="self" type="application/rss+xml"/><item><title>把发布交给 GitHub Actions：双仓库、单提交与一次跨平台迁移</title><link>https://www.lyc6.com/posts/github-actions-publish/</link><pubDate>Fri, 27 Nov 2026 01:20:00 +0800</pubDate><guid>https://www.lyc6.com/posts/github-actions-publish/</guid><description>&lt;p&gt;这个站点一直是「本地构建、本地加密、本地强推」：改完内容，跑一个 PowerShell 脚本，等一两分钟构建和加密，再把产物推上去。人必须待在电脑前，而且那台电脑得装好 Hugo、Node、Dart Sass，密码文件也得在。&lt;/p&gt;
+&lt;p&gt;内容越写越多之后，这件事开始碍事——尤其是出门在外、只想改一句话的时候。于是把整条流水线搬到了 GitHub Actions。下面是设计、踩坑和从 Windows runner 换到 Linux 的记录。&lt;/p&gt;
+&lt;h2 id="一约束"&gt;一、约束&lt;/h2&gt;
+&lt;p&gt;站点有两个仓库，职责完全不同：&lt;/p&gt;
+&lt;div class="table-scroll"&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;仓库&lt;/th&gt;
+&lt;th&gt;内容&lt;/th&gt;
+&lt;th&gt;谁能写&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;源码仓库（私有）&lt;/td&gt;
+&lt;td&gt;Markdown、模板、脚本&lt;/td&gt;
+&lt;td&gt;我，手工提交&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;站点仓库（公开）&lt;/td&gt;
+&lt;td&gt;构建产物&lt;/td&gt;
+&lt;td&gt;只由流水线强推&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;/div&gt;
+&lt;p&gt;三条约束决定了方案：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;源码不能进公开仓库&lt;/strong&gt;——非公开内容在建站时就该被排除在外；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;公开仓库只有一个 &lt;code&gt;Site update&lt;/code&gt; 提交&lt;/strong&gt;——如果保留线性历史，diff 会暴露「这次改了哪些文件、新增了哪些页面」；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;非公开页面必须加密后才能上线&lt;/strong&gt;——构建产物里它们仍是明文，加密这一步不能省。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;所以流水线不是「Hugo 构建完推上去」这么简单，而是：构建 → 加密 → 压成一个提交 → 强推。&lt;/p&gt;
+&lt;h2 id="二流水线的形状"&gt;二、流水线的形状&lt;/h2&gt;
+&lt;p&gt;触发条件只有两个：推送到私有仓库的 &lt;code&gt;main&lt;/code&gt;，或者手动点一次 &lt;code&gt;Run workflow&lt;/code&gt;。&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-yaml" data-lang="yaml"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#f92672"&gt;on&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;push&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;branches&lt;/span&gt;: [&lt;span style="color:#ae81ff"&gt;main]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;workflow_dispatch&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#f92672"&gt;jobs&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;publish&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;runs-on&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;ubuntu-latest&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;steps&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;uses&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;actions/checkout@v4&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;with&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;submodules&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;recursive&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;uses&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;peaceiris/actions-hugo@v3&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;with&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;hugo-version&lt;/span&gt;: &lt;span style="color:#e6db74"&gt;&amp;#39;0.169.0&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;extended&lt;/span&gt;: &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# ... Node、Dart Sass、npm ci ...&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;run&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;bash scripts/publish.sh &lt;/span&gt; &lt;span style="color:#75715e"&gt;# 构建 + 加密&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;run&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;./scripts/check-site.ps1 &lt;/span&gt; &lt;span style="color:#75715e"&gt;# 冒烟检查&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; - &lt;span style="color:#f92672"&gt;uses&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;peaceiris/actions-gh-pages@v4&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;with&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;personal_token&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;${{ secrets.PAGES_TOKEN }}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;external_repository&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;yicongl1/yicongl1.github.io&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;publish_branch&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;main&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;publish_dir&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;./public&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;force_orphan&lt;/span&gt;: &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;full_commit_message&lt;/span&gt;: &lt;span style="color:#ae81ff"&gt;Site update&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;几处细节值得写下来：&lt;/p&gt;</description></item><item><title>从 Solal2600 到 yicongl1：一个个人网站的两次搭建</title><link>https://www.lyc6.com/posts/website-evolution/</link><pubDate>Tue, 24 Nov 2026 20:00:00 +0800</pubDate><guid>https://www.lyc6.com/posts/website-evolution/</guid><description>&lt;p&gt;我现在这个站不是第一次做。2022 年 9 月，我用当时的 GitHub 账号 Solal2600 搭过一版 Hugo 博客；2024 年 4 月，账号换成 yicongl1 之后，又从零搭了现在这一版。&lt;/p&gt;
+&lt;p&gt;两个站用的是同一套工具链——Hugo + GitHub Pages、Markdown 写作、B 站视频嵌入——但它们的定位完全不同：第一版是「记录」，第二版是「作品集」。这篇文章把两次搭建放在一起，看看中间到底改了什么。&lt;/p&gt;
+&lt;h2 id="第一版一个按时间排列的博客"&gt;第一版：一个按时间排列的博客&lt;/h2&gt;
+&lt;p&gt;第一版用的是 &lt;a href="https://github.com/CaiJimmy/hugo-theme-stack" target="_blank" rel="noopener"&gt;Stack&lt;/a&gt; 主题，标题就叫「Personal Website Of Solal」。配置很轻：中文、每页 5 篇、分类是「专业学习 / 写作 / 法国留学 / 读书 / 运动」，标签里是 Git、无人机、机器学习、音乐这些。&lt;/p&gt;
+&lt;figure class="comp-figure"&gt;
+&lt;picture&gt;
+&lt;source type="image/webp" srcset="https://www.lyc6.com/images/posts/website-evolution/old-home_hu_cb6f50a3f57e18ec.webp 480w, https://www.lyc6.com/images/posts/website-evolution/old-home_hu_6c319268d11a7638.webp 800w, https://www.lyc6.com/images/posts/website-evolution/old-home_hu_dfb97301d8fc2e50.webp 1200w" sizes="(max-width: 767px) calc(100vw - 2rem), 760px"&gt;
+&lt;img src="https://www.lyc6.com/images/posts/website-evolution/old-home_hu_18ce75be312d13fe.png"
+width="1200" height="917"
+alt="2022–2023 年的旧站首页（本地构建快照）。左侧是导航，中间是文章卡片，右侧是归档、分类和标签云。"
+loading="lazy" decoding="async"&gt;
+&lt;/picture&gt;
+&lt;figcaption&gt;2022–2023 年的旧站首页（本地构建快照）。左侧是导航，中间是文章卡片，右侧是归档、分类和标签云。&lt;/figcaption&gt;
+&lt;/figure&gt;
+&lt;p&gt;从 2022 年 9 月到 2023 年 7 月，那里大概发了十几篇东西：无人机调试、Git 使用、GPU 服务器、法国吉他购买，也有阅读、做饭、赴法准备和生活记录。归档页显示 2022 年 2 篇、2023 年 11 篇。&lt;/p&gt;
+&lt;p&gt;那一版的好处是&lt;strong&gt;几乎没有门槛&lt;/strong&gt;：新建一个 &lt;code&gt;content/post/*.md&lt;/code&gt;，写 Markdown，放一张封面图，推送就发布。B 站视频用一个 shortcode 嵌进去，分类和标签自动生成归档页。对当时的我来说，它更像一本公开的笔记本——学到什么、去了哪里、读了什么，都往里放。&lt;/p&gt;</description></item><item><title>给简历写一个生成器：从主页数据到 A4 PDF</title><link>https://www.lyc6.com/posts/cv-generator/</link><pubDate>Wed, 18 Nov 2026 20:00:00 +0800</pubDate><guid>https://www.lyc6.com/posts/cv-generator/</guid><description>&lt;p&gt;每次投申请，简历都要改一遍：这个岗位多放两个项目，那个项目砍掉一段经历；中文版、英文版、法文版各改一次。主页上的数据明明是现成的，简历却要手工维护，时间一长两边就对不上。&lt;/p&gt;
+&lt;p&gt;于是有了 &lt;a href="https://www.lyc6.com/cv/"&gt;&lt;code&gt;/cv/&lt;/code&gt;&lt;/a&gt;：一个只给自己用的简历生成器。左边勾选语言和条目，右边实时预览 A4 纸面，点一下直接下载 PDF。这篇文章记录它是怎么搭起来的，以及中间踩到的几个坑。&lt;/p&gt;
+&lt;h2 id="一数据从哪来"&gt;一、数据从哪来&lt;/h2&gt;
+&lt;p&gt;站点的首页本身是数据驱动的：教育、实习、项目、竞赛、技能、链接分别放在 &lt;code&gt;data/&amp;lt;lang&amp;gt;/sections/*.yaml&lt;/code&gt; 里，Toha 主题负责渲染。简历生成器没有另起一套数据，而是在构建时把三种语言的这些 YAML 直接嵌进页面：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-go-html-template" data-lang="go-html-template"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$langs&lt;/span&gt; &lt;span style="color:#f92672"&gt;:=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;slice&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;zh-cn&amp;#34;&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;en&amp;#34;&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;fr&amp;#34;&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$cvData&lt;/span&gt; &lt;span style="color:#f92672"&gt;:=&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;dict&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;range&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$lang&lt;/span&gt; &lt;span style="color:#f92672"&gt;:=&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$langs&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$entry&lt;/span&gt; &lt;span style="color:#f92672"&gt;:=&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;dict&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$d&lt;/span&gt; &lt;span style="color:#f92672"&gt;:=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;index&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;site&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;.Data&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$lang&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$sec&lt;/span&gt; &lt;span style="color:#f92672"&gt;:=&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$d&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;.sections&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;range&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$key&lt;/span&gt; &lt;span style="color:#f92672"&gt;:=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;slice&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;about&amp;#34;&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;education&amp;#34;&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;experiences&amp;#34;&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;projects&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;competitions&amp;#34;&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;achievements&amp;#34;&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;skills&amp;#34;&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;connect&amp;#34;&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$entry&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;merge&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$entry&lt;/span&gt; &lt;span style="color:#f92672"&gt;(&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;dict&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$key&lt;/span&gt; &lt;span style="color:#f92672"&gt;(&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;index&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$sec&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$key&lt;/span&gt; &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;default&lt;/span&gt; &lt;span style="color:#f92672"&gt;(&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;dict&lt;/span&gt;&lt;span style="color:#f92672"&gt;)))&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;end&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$cvData&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;merge&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$cvData&lt;/span&gt; &lt;span style="color:#f92672"&gt;(&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;dict&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$lang&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$entry&lt;/span&gt;&lt;span style="color:#f92672"&gt;)&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#75715e"&gt;{{-&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;end&lt;/span&gt; &lt;span style="color:#75715e"&gt;-}}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;这样只有一处真相：主页改了什么，简历里就有什么。三个语言版本也天然一致，不需要各自维护。&lt;/p&gt;
+&lt;h2 id="二一个不显眼的坑script-标签里的-js-上下文"&gt;二、一个不显眼的坑：script 标签里的 JS 上下文&lt;/h2&gt;
+&lt;p&gt;第一版把所有数据渲染进 &lt;code&gt;&amp;lt;script type=&amp;quot;application/json&amp;quot;&amp;gt;&lt;/code&gt;，结果页面里的 JSON 完全解析不了，打开看是这样一个东西：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&amp;#34;{\&amp;#34;en\&amp;#34;:{\&amp;#34;about\&amp;#34;:{\&amp;#34;badges\&amp;#34;:[...]&amp;#34;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;整段 JSON 被多包了一层引号，里面的引号全被转义了。原因不在 &lt;code&gt;jsonify&lt;/code&gt;，而在 Go 模板的&lt;strong&gt;上下文感知转义&lt;/strong&gt;：模板引擎看到输出位置在 &lt;code&gt;&amp;lt;script&amp;gt;&lt;/code&gt; 标签里，会按 JavaScript 字符串字面量的规则来转义，于是把整段 JSON 当成一个字符串，套上引号。&lt;/p&gt;
+&lt;p&gt;修复只需要一个过滤器：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-go-html-template" data-lang="go-html-template"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&amp;lt;&lt;span style="color:#f92672"&gt;script&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;id&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;cv-data&amp;#34;&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;type&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;application/json&amp;#34;&lt;/span&gt;&amp;gt;&lt;span style="color:#75715e"&gt;{{&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;$cvData&lt;/span&gt; &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;jsonify&lt;/span&gt; &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;safeJS&lt;/span&gt; &lt;span style="color:#75715e"&gt;}}&lt;/span&gt;&amp;lt;/&lt;span style="color:#f92672"&gt;script&lt;/span&gt;&amp;gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;&lt;code&gt;jsonify&lt;/code&gt; 保证输出是合法 JSON，而 JSON 本身就是合法的 JS 字面量；&lt;code&gt;safeJS&lt;/code&gt; 告诉模板引擎「这段内容已经是安全的 JS，别再包一层」。这个坑在任何 Hugo 站点里往 &lt;code&gt;&amp;lt;script&amp;gt;&lt;/code&gt; 注入 JSON 时都会遇到，值得记一笔。&lt;/p&gt;
+&lt;h2 id="三勾选排序与记忆"&gt;三、勾选、排序与记忆&lt;/h2&gt;
+&lt;p&gt;左侧面板按板块分组：每个板块可以整组开关、上下移动；组内每个条目也可以单独勾选、排序。状态结构大致是：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-js" data-lang="js"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;state&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#a6e22e"&gt;lang&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#39;zh-cn&amp;#39;&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#a6e22e"&gt;contact&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#a6e22e"&gt;avatar&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#a6e22e"&gt;style&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; { &lt;span style="color:#a6e22e"&gt;size&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#39;md&amp;#39;&lt;/span&gt;, &lt;span style="color:#a6e22e"&gt;font&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#39;sans&amp;#39;&lt;/span&gt;, &lt;span style="color:#a6e22e"&gt;layout&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#39;single&amp;#39;&lt;/span&gt; },
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#a6e22e"&gt;groups&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; { &lt;span style="color:#e6db74"&gt;&amp;#39;zh-cn&amp;#39;&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; { &lt;span style="color:#a6e22e"&gt;projects&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; { &lt;span style="color:#a6e22e"&gt;enabled&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;, &lt;span style="color:#a6e22e"&gt;selected&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; [...], &lt;span style="color:#a6e22e"&gt;order&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; [...] } } },
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#a6e22e"&gt;groupOrder&lt;/span&gt;&lt;span style="color:#f92672"&gt;:&lt;/span&gt; {}
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;}
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;整个对象序列化进 &lt;code&gt;localStorage&lt;/code&gt;。数据文件以后新增条目时，旧的选择状态长度对不上，就对该组回退为默认全选——不会因为索引错位丢内容。&lt;/p&gt;</description></item><item><title>【网站搭建】静态资源的缓存与多语言链接</title><link>https://www.lyc6.com/posts/webbuild3/</link><pubDate>Wed, 04 Nov 2026 20:00:00 +0800</pubDate><guid>https://www.lyc6.com/posts/webbuild3/</guid><description>&lt;p&gt;这两天给站点加学业档案，踩了两个坑。都不是什么高深问题，但都属于“本地一切正常、线上就是不对”的那类，值得记一下。&lt;/p&gt;
+&lt;h2 id="一为什么线上和本地预览不一样"&gt;一、为什么线上和本地预览不一样&lt;/h2&gt;
+&lt;h3 id="现象"&gt;现象&lt;/h3&gt;
+&lt;p&gt;推送之后打开线上页面：导航栏是新的，说明 HTML 已经更新；但新加的内容完全没有样式——卡片没有边框，校徽按 SVG 原始尺寸铺满半屏。&lt;/p&gt;
+&lt;p&gt;本地 &lt;code&gt;localhost&lt;/code&gt; 预览却完全正常。&lt;/p&gt;
+&lt;h3 id="排查"&gt;排查&lt;/h3&gt;
+&lt;p&gt;先确认服务器上的文件：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;git cat-file -s &lt;span style="color:#e6db74"&gt;&amp;#34;origin/main:css/site.css&amp;#34;&lt;/span&gt; &lt;span style="color:#75715e"&gt;# 发布提交里的文件大小&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;有，大小也对。再看线上页面引用了什么：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-html" data-lang="html"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&amp;lt;&lt;span style="color:#f92672"&gt;link&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;rel&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;stylesheet&amp;#34;&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;href&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;/application.&amp;lt;hash&amp;gt;.css&amp;#34;&lt;/span&gt;&amp;gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&amp;lt;&lt;span style="color:#f92672"&gt;link&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;rel&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;stylesheet&amp;#34;&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;href&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;/css/site.css&amp;#34;&lt;/span&gt;&amp;gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;关键就在这两行的区别：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;application.&amp;lt;hash&amp;gt;.css&lt;/code&gt; 是主题打包的，文件名带内容哈希，每次构建都会变&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;/css/site.css&lt;/code&gt; 是我自己加的补丁样式，文件名永远不变&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;浏览器缓存的是后者。它可能还存着几次部署以前的版本，那时候还没有新加的那些 class。于是新 HTML 配上旧 CSS，结构在、样式没了。&lt;/p&gt;
+&lt;p&gt;本地预览没有这层缓存，所以永远正常。&lt;/p&gt;
+&lt;h3 id="解决"&gt;解决&lt;/h3&gt;
+&lt;p&gt;让 URL 跟着内容走。在 Hugo 模板里算文件内容的 MD5：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-go" data-lang="go"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;{{ &lt;span style="color:#960050;background-color:#1e0010"&gt;$&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;siteCssHash&lt;/span&gt; &lt;span style="color:#f92672"&gt;:=&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;md5&lt;/span&gt; (&lt;span style="color:#a6e22e"&gt;os&lt;/span&gt;.&lt;span style="color:#a6e22e"&gt;ReadFile&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;static/css/site.css&amp;#34;&lt;/span&gt;) }}
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&amp;lt;&lt;span style="color:#a6e22e"&gt;link&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;rel&lt;/span&gt;=&lt;span style="color:#e6db74"&gt;&amp;#34;stylesheet&amp;#34;&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;href&lt;/span&gt;=&lt;span style="color:#e6db74"&gt;&amp;#34;{{ &amp;#34;&lt;/span&gt;&lt;span style="color:#f92672"&gt;/&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;css&lt;/span&gt;&lt;span style="color:#f92672"&gt;/&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;site&lt;/span&gt;.&lt;span style="color:#a6e22e"&gt;css&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34; | relURL }}?v={{ $siteCssHash }}&amp;#34;&lt;/span&gt; &lt;span style="color:#f92672"&gt;/&lt;/span&gt;&amp;gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;输出：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-html" data-lang="html"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&amp;lt;&lt;span style="color:#f92672"&gt;link&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;rel&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;stylesheet&amp;#34;&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;href&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;/css/site.css?v=f92eac970bd1dfa87e9f47bf5e30cbf6&amp;#34;&lt;/span&gt;&amp;gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;内容变，URL 就变；内容不变，缓存继续有效。比 &lt;code&gt;?v=时间戳&lt;/code&gt; 好：时间戳会让每次构建都强制重新下载，白白浪费。&lt;/p&gt;
+&lt;h3 id="一个容易误判的细节"&gt;一个容易误判的细节&lt;/h3&gt;
+&lt;p&gt;排查时我一度以为线上 CSS 少了内容：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;$r.Content.Length &lt;span style="color:#75715e"&gt;# 8884&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;而本地文件是 9942 字节。差了五百多。&lt;/p&gt;
+&lt;p&gt;其实 &lt;code&gt;Content.Length&lt;/code&gt; 数的是&lt;strong&gt;字符&lt;/strong&gt;，文件大小是&lt;strong&gt;字节&lt;/strong&gt;。中文在 UTF-8 里一个字符占三个字节。把 &lt;code&gt;Content&lt;/code&gt; 按 UTF-8 写回文件，正好 9472 字节，和发布版本完全一致。&lt;/p&gt;</description></item><item><title>【网站搭建】Hugo 配置</title><link>https://www.lyc6.com/posts/webbuild1/</link><pubDate>Fri, 05 Apr 2024 00:00:00 +0800</pubDate><guid>https://www.lyc6.com/posts/webbuild1/</guid><description>&lt;p&gt;记录第一次用 Hugo 搭静态站的流程。&lt;/p&gt;
+&lt;h2 id="前期准备"&gt;前期准备&lt;/h2&gt;
+&lt;h3 id="1安装-go"&gt;1）安装 Go&lt;/h3&gt;
+&lt;p&gt;从 &lt;a href="https://go.dev/dl/" target="_blank" rel="noopener"&gt;All releases - The Go Programming Language&lt;/a&gt; 下载 &lt;code&gt;.msi&lt;/code&gt; 安装包，安装到选定目录。&lt;/p&gt;
+&lt;p&gt;在终端输入：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;go version
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;能输出版本号就说明安装成功。&lt;/p&gt;
+&lt;h3 id="2安装-hugo"&gt;2）安装 Hugo&lt;/h3&gt;
+&lt;p&gt;从 &lt;a href="https://github.com/gohugoio/hugo/releases" target="_blank" rel="noopener"&gt;gohugoio/hugo Releases&lt;/a&gt; 下载 Hugo，把 &lt;code&gt;hugo.exe&lt;/code&gt; 所在目录加入系统环境变量 &lt;code&gt;Path&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;验证：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;hugo version
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;h2 id="网站部署"&gt;网站部署&lt;/h2&gt;
+&lt;h3 id="1创建一个新网站"&gt;1）创建一个新网站&lt;/h3&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;hugo new site page-name
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;h3 id="2配置主题"&gt;2）配置主题&lt;/h3&gt;
+&lt;p&gt;在 &lt;a href="https://themes.gohugo.io/" target="_blank" rel="noopener"&gt;Hugo Themes&lt;/a&gt; 里挑一个主题，然后在网站目录中执行：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;cd page-name
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;git init
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;git submodule add &amp;lt;主题仓库地址&amp;gt; themes/&amp;lt;主题名&amp;gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;用 VS Code 打开网站目录，在配置文件 &lt;code&gt;hugo.toml&lt;/code&gt;（旧版本是 &lt;code&gt;config.toml&lt;/code&gt;）中写入：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-toml" data-lang="toml"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;theme&lt;/span&gt; = &lt;span style="color:#e6db74"&gt;&amp;#34;theme-name&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;blockquote&gt;
+&lt;p&gt;现在 Hugo 默认生成 &lt;code&gt;hugo.toml&lt;/code&gt;；如果主题文档写的是 &lt;code&gt;config.toml&lt;/code&gt;，两者作用相同，选一个即可。&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;h3 id="3添加内容"&gt;3）添加内容&lt;/h3&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;hugo new posts/post-name.md
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Markdown 语法可以看 &lt;a href="https://markdown.com.cn/" target="_blank" rel="noopener"&gt;Markdown 官方教程&lt;/a&gt;。&lt;/p&gt;</description></item><item><title>【网站搭建】短代码、面包屑与目录结构</title><link>https://www.lyc6.com/posts/webbuild2/</link><pubDate>Fri, 05 Apr 2024 00:00:00 +0800</pubDate><guid>https://www.lyc6.com/posts/webbuild2/</guid><description>&lt;h2 id="短代码shortcode"&gt;短代码（shortcode）&lt;/h2&gt;
+&lt;p&gt;短代码是 Hugo 提供的模板化片段，可以在 Markdown 里直接调用。&lt;/p&gt;
+&lt;p&gt;参考：&lt;a href="https://stack.jimmycai.com/writing/shortcodes" target="_blank" rel="noopener"&gt;https://stack.jimmycai.com/writing/shortcodes&lt;/a&gt;&lt;/p&gt;
+&lt;h3 id="视频插入"&gt;视频插入&lt;/h3&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-markdown" data-lang="markdown"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;{{&amp;lt; youtube VIDEO_ID &amp;gt;}}
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;{{&amp;lt; bilibili VIDEO_ID PART_NUMBER &amp;gt;}}
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;{{&amp;lt; tencent VIDEO_ID &amp;gt;}}
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;youtube&lt;/code&gt; 的参数是视频 ID，例如 &lt;code&gt;https://www.youtube.com/watch?v=ZFL09qhKi5I&lt;/code&gt; 里的 &lt;code&gt;ZFL09qhKi5I&lt;/code&gt;&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;bilibili&lt;/code&gt; 的第一个参数是 BV 号或 av 号，第二个参数是分 P，省略时默认第 1 P&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;tencent&lt;/code&gt; 的参数是腾讯视频的 vid&lt;/li&gt;
+&lt;/ul&gt;
+&lt;blockquote&gt;
+&lt;p&gt;如果页面在国内访问，YouTube 的 iframe 可能加载不出来；这种情况下换成 &lt;code&gt;bilibili&lt;/code&gt; 短代码更稳。&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;h2 id="图标插入"&gt;图标插入&lt;/h2&gt;
+&lt;h3 id="iconify"&gt;iconify&lt;/h3&gt;
+&lt;p&gt;把 &lt;code&gt;iconify-icon.min.js&lt;/code&gt; 放到 &lt;code&gt;assets/plugins/iconify/&lt;/code&gt; 下，然后在 &lt;code&gt;config.toml&lt;/code&gt; 里注册：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-toml" data-lang="toml"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;[[&lt;span style="color:#a6e22e"&gt;params&lt;/span&gt;.&lt;span style="color:#a6e22e"&gt;plugins&lt;/span&gt;.&lt;span style="color:#a6e22e"&gt;js&lt;/span&gt;]]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;link&lt;/span&gt; = &lt;span style="color:#e6db74"&gt;&amp;#34;plugins/iconify/iconify-icon.min.js&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;之后可以在 Markdown 里直接使用：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-html" data-lang="html"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&amp;lt;&lt;span style="color:#f92672"&gt;iconify-icon&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;icon&lt;/span&gt;&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;simple-icons:bilibili&amp;#34;&lt;/span&gt;&amp;gt;&amp;lt;/&lt;span style="color:#f92672"&gt;iconify-icon&lt;/span&gt;&amp;gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;h3 id="icons8--line-awesome"&gt;icons8 / Line Awesome&lt;/h3&gt;
+&lt;p&gt;在 &lt;code&gt;config.toml&lt;/code&gt; 里配置社交图标：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-toml" data-lang="toml"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;[[&lt;span style="color:#a6e22e"&gt;params&lt;/span&gt;.&lt;span style="color:#a6e22e"&gt;social&lt;/span&gt;]]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;icon&lt;/span&gt; = &lt;span style="color:#e6db74"&gt;&amp;#34;lab la-github&amp;#34;&lt;/span&gt; &lt;span style="color:#75715e"&gt;# https://icons8.com/line-awesome&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;url&lt;/span&gt; = &lt;span style="color:#e6db74"&gt;&amp;#34;https://github.com/podcast-of-engineers&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;模板里这样渲染：&lt;/p&gt;</description></item></channel></rss>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>MAVLink · 李毅聪 · Yicong Li</title><link>https://www.lyc6.com/tags/mavlink/</link><description>李毅聪 · Yicong Li</description><generator>Hugo</generator><language>zh-cn</language><lastBuildDate>Sat, 28 Nov 2026 10:31:23 +0000</lastBuildDate><atom:link href="https://www.lyc6.com/tags/mavlink/rss.xml" rel="self" type="application/rss+xml"/><item><title>20 Hz 的设定点：PX4 OFFBOARD 的五个坑</title><link>https://www.lyc6.com/posts/drone-offboard-setpoints/</link><pubDate>Wed, 11 Nov 2026 11:00:00 +0800</pubDate><guid>https://www.lyc6.com/posts/drone-offboard-setpoints/</guid><description>&lt;p&gt;项目仓库：&lt;a href="https://github.com/yicongl1/Drone-Delivery-2022" target="_blank" rel="noopener"&gt;https://github.com/yicongl1/Drone-Delivery-2022&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;2022 年那台配送无人机，飞控是 PX4，上层是 Jetson Nano 上的 ROS。所有“自主”最终都落成一件事：&lt;strong&gt;以 20 Hz 的频率，把一个位置设定点发给飞控&lt;/strong&gt;。这篇把当时踩过的五个坑按顺序写下来，每一个都来自“明明代码没错，但飞机不听话”。&lt;/p&gt;
+&lt;h2 id="坑一先切模式再解锁"&gt;坑一：先切模式，再解锁&lt;/h2&gt;
+&lt;p&gt;OFFBOARD（外部控制）模式要求飞控持续收到来自机载计算机的设定点。如果解锁之后迟迟没有设定点进来，PX4 会认为外部链路不可靠，自动上锁——现象就是“解锁了，但螺旋桨没转起来”，或者刚离地就掉下来。&lt;/p&gt;
+&lt;p&gt;所以现场流程是固定的：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;地面站先发 &lt;code&gt;set_mode&lt;/code&gt; 切到 OFFBOARD；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;send_info_node&lt;/code&gt; 立刻开始以 20 Hz 发设定点；&lt;/li&gt;
+&lt;li&gt;再调用 &lt;code&gt;mavros/cmd/arming&lt;/code&gt; 解锁。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;官方文档里还有一条：解锁后 5 秒内必须进入 OFFBOARD。我们的流程天然满足，但这条规则决定了顺序不能反。&lt;/p&gt;
+&lt;h2 id="坑二设定点一停模式就掉"&gt;坑二：设定点一停，模式就掉&lt;/h2&gt;
+&lt;p&gt;OFFBOARD 不是“设一次就一直有效”的状态，而是一个&lt;strong&gt;必须持续喂数据的模式&lt;/strong&gt;。任何一次 1 秒的停顿——&lt;code&gt;cin&lt;/code&gt; 等你输入航点、打印日志卡住、SSH 断流——都可能让飞控退出 OFFBOARD，飞机随即进入失控保护。&lt;/p&gt;
+&lt;p&gt;我们为此专门写了一个 &lt;code&gt;send_info_node&lt;/code&gt;：只要飞机不是“已解锁且处于 OFFBOARD”这个状态，就以 20 Hz 持续发布速度设定点。它是一张安全网，代价很低（一个只发消息的节点），但没有它，有一次调试就因为在地面站里多敲了一行命令，飞机在半空掉出了 OFFBOARD。&lt;/p&gt;
+&lt;h2 id="坑三设定点不能跳"&gt;坑三：设定点不能跳&lt;/h2&gt;
+&lt;p&gt;这是整个项目里最影响观感的一条。向飞控发布一个距离 3 米的目标点，和让设定点每 50 ms 挪 5 厘米，飞控接收到的都是“位置”，但响应完全不同：前者是阶跃输入，姿态会猛冲、过冲、再修正；后者是一条平滑轨迹。&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-cpp" data-lang="cpp"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;void&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;add_target&lt;/span&gt;(&lt;span style="color:#66d9ef"&gt;int&lt;/span&gt; i) {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; (&lt;span style="color:#66d9ef"&gt;int&lt;/span&gt; j &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;; j &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;3&lt;/span&gt;; j&lt;span style="color:#f92672"&gt;++&lt;/span&gt;) {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (abs(next_point[j] &lt;span style="color:#f92672"&gt;-&lt;/span&gt; fly_point[i &lt;span style="color:#f92672"&gt;+&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;][j]) &lt;span style="color:#f92672"&gt;&amp;gt;&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0.3&lt;/span&gt;) {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (next_point[j] &lt;span style="color:#f92672"&gt;&amp;gt;&lt;/span&gt; fly_point[i &lt;span style="color:#f92672"&gt;+&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;][j]) {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; next_point[j] &lt;span style="color:#f92672"&gt;-=&lt;/span&gt; change;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; } &lt;span style="color:#66d9ef"&gt;else&lt;/span&gt; {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; next_point[j] &lt;span style="color:#f92672"&gt;+=&lt;/span&gt; change;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; }
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; } &lt;span style="color:#66d9ef"&gt;else&lt;/span&gt; {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; next_point[j] &lt;span style="color:#f92672"&gt;=&lt;/span&gt; fly_point[i &lt;span style="color:#f92672"&gt;+&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;][j];
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; }
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; }
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;}
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;&lt;code&gt;change&lt;/code&gt; 取 0.02~0.05 m。剩下的距离小于 0.3 m 时直接吸附到目标点，否则永远差最后一点点。这个“阈值内吸附”的写法很土，但解决了“逐步逼近永远到不了”的问题。&lt;/p&gt;</description></item></channel></rss>

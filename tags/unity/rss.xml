@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Unity · 李毅聪 · Yicong Li</title><link>https://www.lyc6.com/tags/unity/</link><description>李毅聪 · Yicong Li</description><generator>Hugo</generator><language>zh-cn</language><lastBuildDate>Sat, 28 Nov 2026 10:31:23 +0000</lastBuildDate><atom:link href="https://www.lyc6.com/tags/unity/rss.xml" rel="self" type="application/rss+xml"/><item><title>用协程刷怪、用状态机巡逻：2D 射击的敌人循环</title><link>https://www.lyc6.com/posts/unity-shooter-loop/</link><pubDate>Mon, 09 Nov 2026 13:00:00 +0800</pubDate><guid>https://www.lyc6.com/posts/unity-shooter-loop/</guid><description>&lt;p&gt;项目代码：&lt;a href="https://github.com/yicongl1/Unity-Portfolio" target="_blank" rel="noopener"&gt;https://github.com/yicongl1/Unity-Portfolio&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;飞龙射击是我做的第一个完整的 2D 竖版射击：玩家移动、连发、随机刷怪、受击反馈、Boss 巡逻。它不复杂，但把几个最常用的 Unity 模式都用了一遍。这篇拆开讲。&lt;/p&gt;
+&lt;h2 id="刷怪一个不会结束的协程"&gt;刷怪：一个不会结束的协程&lt;/h2&gt;
+&lt;p&gt;敌人不是一次性生成的，而是按随机间隔持续出现：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-csharp" data-lang="csharp"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;IEnumerator Create()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;{
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;while&lt;/span&gt; (&lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;float&lt;/span&gt; t = Random.Range(minTime, maxTime);
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;yield&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;new&lt;/span&gt; WaitForSeconds(t);
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;int&lt;/span&gt; i = Random.Range(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, monsters.Count);
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; Vector3 pos = &lt;span style="color:#66d9ef"&gt;new&lt;/span&gt; Vector3(Random.Range(-&lt;span style="color:#ae81ff"&gt;2.3f&lt;/span&gt;, &lt;span style="color:#ae81ff"&gt;2.3f&lt;/span&gt;), transform.position.y, &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;);
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; Instantiate(monsters[i], pos, Quaternion.identity);
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; }
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;}
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;用协程而不是在 &lt;code&gt;Update&lt;/code&gt; 里累加计时器，好处是“等待”写在代码的顺序里，读起来就是时间线：等一会儿 → 选怪 → 选位置 → 生成 → 再来一次。&lt;/p&gt;
+&lt;p&gt;代价是协程跟着 MonoBehaviour 的生命周期走：脚本禁用或物体销毁，协程就停了。如果刷怪器挂在会被销毁的对象上，“突然不刷怪了”通常就是这个原因。&lt;/p&gt;
+&lt;h2 id="连发冷却时间而不是协程"&gt;连发：冷却时间而不是协程&lt;/h2&gt;
+&lt;p&gt;玩家的射击用的是时间戳：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-csharp" data-lang="csharp"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;public&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;void&lt;/span&gt; Fire()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;{
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (Time.time &amp;lt; lastFireTime + fireCD) &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt;;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; Vector3 pos = transform.position + &lt;span style="color:#66d9ef"&gt;new&lt;/span&gt; Vector3(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, &lt;span style="color:#ae81ff"&gt;0.8f&lt;/span&gt;, &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;);
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; Transform bullet = Instantiate(prefabBullet, pos, Quaternion.identity);
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; lastFireTime = Time.time;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;}
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;按住 &lt;code&gt;J&lt;/code&gt; 时，&lt;code&gt;Update&lt;/code&gt; 每帧都会调用 &lt;code&gt;Fire()&lt;/code&gt;，但只有距离上次发射超过 &lt;code&gt;fireCD&lt;/code&gt; 才真正生成子弹。这比“协程里循环生成”更简单，也不会因为协程被中断而卡住射击。&lt;/p&gt;</description></item><item><title>Unity 入门：每帧循环与三个 C# 模式</title><link>https://www.lyc6.com/posts/unity-update-fixedupdate/</link><pubDate>Mon, 09 Nov 2026 12:00:00 +0800</pubDate><guid>https://www.lyc6.com/posts/unity-update-fixedupdate/</guid><description>&lt;p&gt;项目代码：&lt;a href="https://github.com/yicongl1/Unity-Portfolio" target="_blank" rel="noopener"&gt;https://github.com/yicongl1/Unity-Portfolio&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;Unity 初学者最容易踩的坑之一，是把“读输入”和“动物理”写在同一个循环里。我的几个原型里都出现过这个问题，后来才慢慢分清 &lt;code&gt;Update&lt;/code&gt; 和 &lt;code&gt;FixedUpdate&lt;/code&gt; 的职责。这篇用项目里的三段代码说明。&lt;/p&gt;
+&lt;h2 id="两个循环两种时间"&gt;两个循环，两种时间&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;Update&lt;/code&gt; 每渲染一帧调用一次，间隔不固定，适合读输入、更新 UI、做与帧率无关的插值。&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;FixedUpdate&lt;/code&gt; 按固定的物理步长调用（默认 0.02 s），适合 &lt;code&gt;Rigidbody&lt;/code&gt;、力和碰撞相关的计算。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;它们的调用次数并不一一对应：一帧可能执行 0 次、1 次或多次 &lt;code&gt;FixedUpdate&lt;/code&gt;。所以：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;在 &lt;code&gt;FixedUpdate&lt;/code&gt; 里用 &lt;code&gt;Input.GetKeyDown&lt;/code&gt; 会漏输入（它只在某一帧为 true）；&lt;/li&gt;
+&lt;li&gt;在 &lt;code&gt;Update&lt;/code&gt; 里直接改 &lt;code&gt;Rigidbody&lt;/code&gt; 速度，会让物理行为随帧率变化。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2 id="变色跑酷把输入存成标记"&gt;变色跑酷：把输入存成标记&lt;/h2&gt;
+&lt;p&gt;变色跑酷里，按键在 &lt;code&gt;Update&lt;/code&gt; 里读，动作在 &lt;code&gt;FixedUpdate&lt;/code&gt; 里执行：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-csharp" data-lang="csharp"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;public&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;class&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;PlayerCtrl&lt;/span&gt; : MonoBehaviour
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;{
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;private&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;bool&lt;/span&gt; jump;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;private&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;bool&lt;/span&gt; changeColor;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;private&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;void&lt;/span&gt; Update()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (Input.GetKeyDown(Jump)) jump = &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; (Input.GetKeyDown(Change)) changeColor = &lt;span style="color:#66d9ef"&gt;true&lt;/span&gt;;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; }
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;private&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;void&lt;/span&gt; FixedUpdate()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pchar.Move(jump, changeColor);
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; jump = &lt;span style="color:#66d9ef"&gt;false&lt;/span&gt;;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; changeColor = &lt;span style="color:#66d9ef"&gt;false&lt;/span&gt;;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; }
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;}
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;这段代码的关键不是“分两个函数”，而是&lt;strong&gt;标记的生命周期&lt;/strong&gt;：&lt;/p&gt;</description></item></channel></rss>
